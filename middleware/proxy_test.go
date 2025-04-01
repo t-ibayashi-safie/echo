@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/net/websocket"
 )
 
 // Assert expected with url.EscapedPath method to obtain the path.
@@ -814,25 +814,26 @@ func TestModifyResponseUseContext(t *testing.T) {
 }
 
 func TestProxyWithConfig_WebSocket_TCP(t *testing.T) {
+	/*
+		Arrange
+	*/
 	e := echo.New()
 
 	// Create a WebSocket test server
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{}
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-
-		// Echo message back to the client
-		for {
-			messageType, msg, err := conn.ReadMessage()
-			if err != nil {
-				return
+		wsHandler := func(conn *websocket.Conn) {
+			defer conn.Close()
+			for {
+				var msg string
+				err := websocket.Message.Receive(conn, &msg)
+				if err != nil {
+					return
+				}
+				// message back to the client
+				websocket.Message.Send(conn, msg)
 			}
-			conn.WriteMessage(messageType, msg)
 		}
+		websocket.Server{Handler: wsHandler}.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
 
@@ -848,117 +849,101 @@ func TestProxyWithConfig_WebSocket_TCP(t *testing.T) {
 	tsURL.Scheme = "ws"
 	tsURL.Path = "/"
 
+	/*
+		Act
+	*/
+
 	// Connect to the proxy WebSocket
-	wsConn, _, err := websocket.DefaultDialer.Dial(tsURL.String(), nil)
+	wsConn, err := websocket.Dial(tsURL.String(), "", "http://localhost/")
 	assert.NoError(t, err)
 	defer wsConn.Close()
 
 	// Send message
 	sendMsg := "Hello, WebSocket!"
-	err = wsConn.WriteMessage(websocket.TextMessage, []byte(sendMsg))
+	err = websocket.Message.Send(wsConn, sendMsg)
 	assert.NoError(t, err)
 
+	/*
+		Assert
+	*/
 	// Read response
-	_, recvMsg, err := wsConn.ReadMessage()
+	var recvMsg string
+	err = websocket.Message.Receive(wsConn, &recvMsg)
 	assert.NoError(t, err)
-	assert.Equal(t, sendMsg, string(recvMsg))
-}
-
-func TestTLS(t *testing.T) {
-	e := echo.New()
-
-	// Echo にハンドラを設定
-	e.GET("/", func(c echo.Context) error {
-		return c.String(http.StatusOK, "Hello, TLS!")
-	})
-
-	// TLS対応のテストサーバーを作成
-	ts := httptest.NewTLSServer(e)
-	defer ts.Close()
-
-	// クライアントの設定（テスト用に証明書検証を無効化）
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	// TLS サーバーにリクエストを送信
-	resp, err := client.Get(ts.URL)
-	assert.NoError(t, err)
-	defer resp.Body.Close()
-
-	// レスポンスボディを読み取る
-	body, err := io.ReadAll(resp.Body)
-	assert.NoError(t, err)
-	assert.Equal(t, "Hello, TLS!", string(body))
+	assert.Equal(t, sendMsg, recvMsg)
 }
 
 func TestProxyWithConfig_WebSocket_TLS(t *testing.T) {
+	/*
+		Arrange
+	*/
 	e := echo.New()
 
-	// TLS WebSocket サーバーを作成
+	// Create a WebSocket test server
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{}
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-
-		// Echo message back to the client
-		for {
-			messageType, msg, err := conn.ReadMessage()
-			if err != nil {
-				return
+		wsHandler := func(conn *websocket.Conn) {
+			defer conn.Close()
+			for {
+				var msg string
+				err := websocket.Message.Receive(conn, &msg)
+				if err != nil {
+					return
+				}
+				// message back to the client
+				websocket.Message.Send(conn, msg)
 			}
-			conn.WriteMessage(messageType, msg)
 		}
+		websocket.Server{Handler: wsHandler}.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
 
-	// ターゲットURLのパース
+	// create proxy server
 	tgtURL, _ := url.Parse(srv.URL)
-	tgtURL.Scheme = "wss" // TLS サーバーなので wss に変更
+	tgtURL.Scheme = "wss"
 
-	// ロードバランサーを作成
 	balancer := NewRandomBalancer([]*ProxyTarget{{URL: tgtURL}})
 
-	// Echo にプロキシミドルウェアを設定
 	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		t.Fatal("Default transport is not of type *http.Transport")
 	}
 	transport := defaultTransport.Clone()
 	transport.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: true, // spyder-liveサーバーはドメイン名を持たないため、証明書の検証をスキップする
+		InsecureSkipVerify: true,
 	}
 	e.Use(ProxyWithConfig(ProxyConfig{Balancer: balancer, Transport: transport}))
 
-	// テスト用のTLS対応プロキシサーバーを立ち上げ
+	// Start test server
 	ts := httptest.NewTLSServer(e)
 	defer ts.Close()
 
-	// プロキシサーバーのURLを WebSocket 用に変換
 	tsURL, _ := url.Parse(ts.URL)
 	tsURL.Scheme = "wss"
 	tsURL.Path = "/"
 
-	// WebSocket クライアントを作成
-	dialer := websocket.Dialer{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // 証明書検証をスキップ（テスト用）
+	/*
+		Act
+	*/
+	origin, err := url.Parse(ts.URL)
+	assert.NoError(t, err)
+	config := &websocket.Config{
+		Location:  tsURL,
+		Origin:    origin,
+		TlsConfig: &tls.Config{InsecureSkipVerify: true}, // skip verify for testing
+		Version:   websocket.ProtocolVersionHybi13,
 	}
-	wsConn, _, err := dialer.Dial(tsURL.String(), nil)
+	wsConn, err := websocket.DialConfig(config)
 	assert.NoError(t, err)
 	defer wsConn.Close()
 
-	// メッセージを送信
-	sendMsg := "Hello, Secure WebSocket!"
-	err = wsConn.WriteMessage(websocket.TextMessage, []byte(sendMsg))
+	// Send message
+	sendMsg := "Hello, TLS WebSocket!"
+	err = websocket.Message.Send(wsConn, sendMsg)
 	assert.NoError(t, err)
 
-	// メッセージを受信
-	_, recvMsg, err := wsConn.ReadMessage()
+	// Read response
+	var recvMsg string
+	err = websocket.Message.Receive(wsConn, &recvMsg)
 	assert.NoError(t, err)
-	assert.Equal(t, sendMsg, string(recvMsg))
+	assert.Equal(t, sendMsg, recvMsg)
 }
