@@ -144,12 +144,12 @@ func proxyRaw(t *ProxyTarget, c echo.Context, config ProxyConfig) http.Handler {
 		if c.IsTLS() {
 			transport, ok := config.Transport.(*http.Transport)
 			if !ok {
-				c.Set("_error", echo.NewHTTPError(http.StatusBadGateway, fmt.Sprintf("proxy raw, transport is not set, url=%s", t.URL)))
+				c.Set("_error", echo.NewHTTPError(http.StatusBadGateway, "proxy raw, invalid transport type"))
 				return
 			}
 
 			if transport.TLSClientConfig == nil {
-				c.Set("_error", echo.NewHTTPError(http.StatusBadGateway, fmt.Sprintf("proxy raw, transport TLSClientConfig is not set, url=%s", t.URL)))
+				c.Set("_error", echo.NewHTTPError(http.StatusBadGateway, "proxy raw, TLSClientConfig is not set"))
 				return
 			}
 
